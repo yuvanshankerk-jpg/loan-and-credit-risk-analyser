@@ -1,13 +1,48 @@
-import os
 from flask import Flask, request, render_template_string
+import numpy as np
 import pandas as pd
-import joblib
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
 
 app = Flask(__name__)
 
-# Load model using absolute path for Vercel serverless environment
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-model = joblib.load(os.path.join(BASE_DIR, "loan_classifier_model.joblib"))
+# Train model automatically on startup (no .joblib file needed)
+def train_model():
+    np.random.seed(42)
+    n = 800
+    income = np.random.normal(50000, 18000, n).clip(15000, 150000)
+    loan_amount = np.random.normal(15000, 7000, n).clip(2000, 50000)
+    credit_score = np.random.normal(680, 80, n).clip(300, 850)
+    age = np.random.randint(21, 65, n)
+    emp = np.random.choice(["Employed", "Self-Employed", "Unemployed"], n, p=[0.7, 0.2, 0.1])
+    edu = np.random.choice(["Graduate", "Not Graduate"], n, p=[0.75, 0.25])
+    purpose = np.random.choice(["Home", "Education", "Debt_Consolidation", "Personal"], n)
+
+    dti = loan_amount / income
+    risk = (dti * 3.0) + (850 - credit_score) / 150 + (emp == "Unemployed") * 2.0 - (edu == "Graduate") * 0.4
+    prob = 1 / (1 + np.exp(risk - 3.2))
+    y = np.random.binomial(1, prob)
+
+    X = pd.DataFrame({
+        "Age": age, "Income": income, "LoanAmount": loan_amount, "CreditScore": credit_score,
+        "EmploymentStatus": emp, "Education": edu, "LoanPurpose": purpose
+    })
+
+    preprocessor = ColumnTransformer([
+        ("num", StandardScaler(), ["Age", "Income", "LoanAmount", "CreditScore"]),
+        ("cat", OneHotEncoder(handle_unknown="ignore"), ["EmploymentStatus", "Education", "LoanPurpose"])
+    ])
+
+    pipe = Pipeline([
+        ("preprocessor", preprocessor),
+        ("classifier", RandomForestClassifier(n_estimators=50, max_depth=7, class_weight="balanced", random_state=42))
+    ])
+    pipe.fit(X, y)
+    return pipe
+
+model = train_model()
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -103,6 +138,3 @@ def home():
             css_class = "rejected"
 
     return render_template_string(HTML_TEMPLATE, result=result, detail=detail, css_class=css_class)
-
-if __name__ == "__main__":
-    app.run(debug=True)
